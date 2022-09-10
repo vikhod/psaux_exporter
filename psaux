@@ -1,0 +1,46 @@
+#!/bin/bash
+
+set -eu${DEBUG+x}
+set -o pipefail
+
+LOG_FILE="/var/log/psaux_to_pushgateway.log"
+PUSH_GATEWAY_ENDPOINT="https://pushgw.somewhere.com:9091"
+METRICS_PATH="metrics/job/top/instance/"$(hostname)
+SLEEP_TIME=30
+
+while true
+do
+    echo $(date)" - STARTING" | tee -a ${LOG_FILE}
+
+    #SAVED_PS_OUTPUT_SORTED_BY_CPU=$(cat data.txt |  sort  -k3 -rn | head -5 | tee -a ${LOG_FILE})
+    SAVED_PS_OUTPUT_SORTED_BY_CPU==$(ps --no-header aux |  sort  -k3 -rn | tee -a ${LOG_FILE})
+    SAVED_PS_OUTPUT_SORTED_BY_MEM=$(echo -e "${SAVED_PS_OUTPUT_SORTED_BY_CPU}" | sort -k4 -rn)
+
+    # Read and POST metrics
+    top_cpu=$( echo -e "${SAVED_PS_OUTPUT_SORTED_BY_CPU}"| awk '{ print "top_cpu_usage{resource=\"cpu\", process=\""$11"\", pid=\""$2"\"} " $3 }' )
+    top_mem=$( echo -e "${SAVED_PS_OUTPUT_SORTED_BY_MEM}"| awk '{ print "top_mem_usage{resource=\"mem\", process=\""$11"\", pid=\""$2"\"}", $4 }' )
+
+
+    if [ "${DEBUG:-"NODEBUG"}" != "NODEBUG" ];
+    then
+        echo "DEBUG MODE is enabled, printing results instead of pushing to the GW"
+        CMD_PREFIX="echo "
+    else
+        CMD_PREFIX=""
+    fi
+
+    ${CMD_PREFIX} curl \
+        -X POST \
+        -H "Content-Type: text/plain" \
+        --data "${top_cpu}" \
+        "${PUSH_GATEWAY_ENDPOINT}/${METRICS_PATH}" 2>&1 | tee -a ${LOG_FILE}
+
+    ${CMD_PREFIX} curl  \
+        -X POST \
+        -H "Content-Type: text/plain" \
+        --data "${top_mem}" \
+        "${PUSH_GATEWAY_ENDPOINT}/${METRICS_PATH}" 2>&1 | tee -a ${LOG_FILE}
+
+    echo $(date)" - POSTED" | tee -a ${LOG_FILE}
+    sleep ${SLEEP_TIME}
+done
